@@ -1,0 +1,110 @@
+/* General App Styling */
+.App {
+  text-align: center;
+  font-family: sans-serif;
+  display: flex;
+  flex-direction: column;
+  height: 100vh; /* Full viewport height */
+  background-color: #f4f7f6; /* Light background */
+}
+
+.App-header {
+  background-color: #282c34;
+  padding: 15px;
+  color: white;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.App-header h1 {
+  margin: 0;
+  font-size: 1.5em;
+}
+
+/* Chat Window */
+.chat-window {
+  flex-grow: 1; /* Takes up available space */
+  overflow-y: auto; /* Scrollable */
+  padding: 20px;
+  background-color: #ffffff; /* White chat area */
+  border-bottom: 1px solid #eee;
+  display: flex;
+  flex-direction: column; /* Stack messages vertically */
+}
+
+/* Individual Messages */
+.message {
+  margin-bottom: 15px;
+  padding: 10px 15px;
+  border-radius: 15px;
+  max-width: 70%;
+  word-wrap: break-word; /* Prevent long words from overflowing */
+  clear: both; /* Ensure messages don't overlap weirdly */
+}
+
+.message.user {
+  background-color: #dcf8c6; /* Light green for user */
+  align-self: flex-end; /* Align user messages to the right */
+  margin-left: auto; /* Push to the right */
+  text-align: right;
+}
+
+.message.assistant {
+  background-color: #e9e9eb; /* Light grey for assistant */
+  align-self: flex-start; /* Align assistant messages to the left */
+  margin-right: auto; /* Push to the left */
+  text-align: left;
+}
+
+.message p {
+  margin: 0;
+  line-height: 1.4;
+}
+
+.message p strong {
+  display: block; /* Put sender on its own line */
+  margin-bottom: 3px;
+  font-size: 0.9em;
+  color: #555;
+}
+
+.message.assistant i { /* Style the 'thinking...' message */
+  color: #666;
+}
+
+
+/* Input Area */
+.input-area {
+  display: flex;
+  padding: 15px;
+  border-top: 1px solid #ccc;
+  background-color: #f0f0f0;
+}
+
+.input-area input {
+  flex-grow: 1;
+  padding: 10px 15px;
+  border: 1px solid #ccc;
+  border-radius: 20px;
+  margin-right: 10px;
+  font-size: 1em;
+}
+
+.input-area button {
+  padding: 10px 20px;
+  border: none;
+  background-color: #5c6bc0; /* A nice blue */
+  color: white;
+  border-radius: 20px;
+  cursor: pointer;
+  font-size: 1em;
+  transition: background-color 0.2s ease;
+}
+
+.input-area button:hover {
+  background-color: #3f51b5; /* Darker blue on hover */
+}
+
+.input-area button:disabled {
+  background-color: #9fa8da; /* Lighter blue when disabled */
+  cursor: not-allowed;
+}
