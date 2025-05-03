@@ -132,11 +132,13 @@ app.post('/api/chat', async (req, res) => {
                 let result; // To store the output of the locally executed function
                 switch (name) {
                     case "generate_image":
+                        console.log("Tool 'generate_image' executed.");
                         const imageResponse = await openai.images.generate({
                             model: "gpt-image-1", // Use the model specified in docs
                             prompt: args.prompt,
                             n: 1,
-                            size: "1024x1024"
+                            size: "1024x1024",
+                            quality: "medium"
                         });
                         // Directly use the base64 data from the response as per docs
                         imageBase64 = imageResponse.data[0].b64_json;
@@ -154,11 +156,12 @@ app.post('/api/chat', async (req, res) => {
                             result = "Error: No previous image found to edit.";
                             break;
                         }
+                        console.log("Tool 'edit_image' executed.");
                         const imageBuffer = Buffer.from(lastGeneratedImageBase64, 'base64');
                         const imageInput = await toFile(imageBuffer, 'image_to_edit.png', { type: 'image/png' });
                         const editResponse = await openai.images.edit({
                             model: "gpt-image-1", // Use the same model
-                            image: imageBuffer, // Pass the buffer
+                            image: imageInput, // Pass the file-like object created by toFile
                             prompt: args.prompt,
                             n: 1,
                             size: "1024x1024"
@@ -168,7 +171,7 @@ app.post('/api/chat', async (req, res) => {
                             throw new Error("Image edit response did not contain b64_json data.");
                         }
                         lastGeneratedImageBase64 = imageBase64;
-                        console.log("Tool 'edit_image' executed.");
+                        console.log("Tool 'edit_image' executed successfully. Response data:", JSON.stringify(editResponse.data[0], null, 2));
                         result = "Image edited successfully."; // Set result for function_call_output
                         break;
 
@@ -178,6 +181,7 @@ app.post('/api/chat', async (req, res) => {
                             result = "Error: No image available to analyze.";
                             break;
                         }
+                        console.log("Tool 'analyze_image' executed.");
                         // Execute the analysis by calling the API *internally* as part of the tool execution
                         const visionInput = [{
                             role: "user",
@@ -222,13 +226,17 @@ app.post('/api/chat', async (req, res) => {
                 store: true // Ensure state is stored for potential future turns
             });
 
+            console.log("Received final response from API after tool execution:", JSON.stringify(finalResponse, null, 2));
+
             // Extract final assistant text from this second response
             const finalAssistantMessage = finalResponse.output?.find(item => item.type === 'message' && item.role === 'assistant');
-            assistantText = finalAssistantMessage?.content?.find(c => c.type === 'output_text')?.text || "Sorry, I couldn't finalize the response after tool use.";
+            assistantText = finalAssistantMessage?.content?.find(c => c.type === 'output_text')?.text || "Sorry, I couldn't process the results of the tool call."; // More specific fallback
 
+            console.log(`Extracted final assistant text: ${assistantText}`);
             lastResponseId = finalResponse.id; // Update state with the ID of the *final* response
 
             // --- Send Response to Client ---
+            console.log(`Sending final response to client. Image included: ${!!imageBase64}`);
             res.json({
                 assistantResponse: assistantText,
                 imageBase64: imageBase64 // Send image if generated/edited during this turn
