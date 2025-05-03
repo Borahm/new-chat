@@ -105,6 +105,7 @@ app.post('/api/chat', async (req, res) => {
                     const editResponse = await openai.images.edit({
                         model: "gpt-image-1",
                         image: imageInput, // Pass the prepared image file object
+                        quality: "medium",
                         prompt: editPrompt,
                         n: 1,
                         size: "1024x1024" // Keep size consistent for now
@@ -141,6 +142,7 @@ app.post('/api/chat', async (req, res) => {
                     const imageResponse = await openai.images.generate({
                         model: "gpt-image-1",
                         prompt: imagePrompt,
+                        quality: "medium",
                         n: 1,
                         size: "1024x1024"
                     });
