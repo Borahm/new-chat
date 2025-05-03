@@ -7,6 +7,8 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const inputRef = useRef(null);
 
+  const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3001/api';
+
   useEffect(() => {
     if (!isLoading) {
       inputRef.current?.focus();
@@ -23,7 +25,7 @@ function App() {
 
     try {
       // --- Send message to backend API ---
-      const response = await fetch('http://localhost:3001/api/chat', { // Ensure the backend URL is correct
+      const response = await fetch(`${API_URL}/chat`, { // Use the API_URL variable
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
