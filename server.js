@@ -3,6 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const OpenAI = require('openai');
 const { toFile } = require('openai'); // Import toFile helper
+const path = require('path');
 
 const app = express();
 const port = process.env.PORT || 3001;
@@ -16,6 +17,9 @@ const modelId = process.env.OPENAI_MODEL_ID || 'gpt-4o'; // Or your preferred mo
 // --- Middleware ---
 app.use(cors());
 app.use(express.json());
+
+// Serve static files from the React app
+app.use(express.static(path.join(__dirname, 'client/build')));
 
 // --- In-memory store for conversation state ---
 let lastResponseId = null; // Store the ID of the last response for context
@@ -276,6 +280,12 @@ app.post('/api/chat', async (req, res) => {
         lastResponseId = null;
         lastGeneratedImageBase64 = null; // Also reset last image on general error
     }
+});
+
+// The "catchall" handler: for any request that doesn't
+// match one above, send back React's index.html file.
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'client/build', 'index.html'));
 });
 
 app.listen(port, () => {
