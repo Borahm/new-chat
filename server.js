@@ -113,92 +113,103 @@ app.post('/api/chat', async (req, res) => {
         let assistantText = null;
         let imageBase64 = null;
 
-        // --- Process function calls ---
-        for (const toolCall of responseData.output) {
-            if (toolCall.type !== "function_call") {
-                continue;
-            }
+        // Initialize the input for the next API call
+        let conversationInput = [{ role: "user", content: message }];
 
-            const name = toolCall.name;
-            const args = JSON.parse(toolCall.arguments);
+        // Extract the first assistant message (which might contain tool calls)
+        const firstAssistantMessage = responseData.output?.find(item => item.type === 'message' && item.role === 'assistant');
+        if (firstAssistantMessage) {
+            conversationInput.push(firstAssistantMessage); // Add assistant's turn
+        }
 
-            let result;
-            switch (name) {
-                case "generate_image":
-                    const imageResponse = await openai.images.generate({
-                        model: "gpt-image-1",
-                        prompt: args.prompt,
-                        quality: "medium",
-                        n: 1,
-                        size: "1024x1024"
-                    });
-                    imageBase64 = imageResponse.data[0].b64_json;
-                    lastGeneratedImageBase64 = imageBase64;
-                    result = "Image generated successfully";
-                    break;
+        // --- Process function calls (if any) ---
+        const toolCalls = responseData.output?.filter(item => item.type === "function_call") || [];
 
-                case "edit_image":
-                    if (!lastGeneratedImageBase64) {
-                        result = "No previous image found to edit. Please generate one first.";
+        if (toolCalls.length > 0) {
+            for (const toolCall of toolCalls) {
+                const name = toolCall.name;
+                const args = JSON.parse(toolCall.arguments);
+
+                let result;
+                switch (name) {
+                    case "generate_image":
+                        const imageResponse = await openai.images.generate({
+                            model: "gpt-image-1",
+                            prompt: args.prompt,
+                            quality: "medium",
+                            n: 1,
+                            size: "1024x1024"
+                        });
+                        imageBase64 = imageResponse.data[0].b64_json;
+                        lastGeneratedImageBase64 = imageBase64;
+                        result = "Image generated successfully";
                         break;
-                    }
-                    const imageBuffer = Buffer.from(lastGeneratedImageBase64, 'base64');
-                    const imageInput = await toFile(imageBuffer, 'image_to_edit.png', { type: 'image/png' });
-                    const editResponse = await openai.images.edit({
-                        model: "gpt-image-1",
-                        image: imageInput,
-                        quality: "medium",
-                        prompt: args.prompt,
-                        n: 1,
-                        size: "1024x1024"
-                    });
-                    imageBase64 = editResponse.data[0].b64_json;
-                    lastGeneratedImageBase64 = imageBase64;
-                    result = "Image edited successfully";
-                    break;
 
-                case "analyze_image":
-                    if (!lastGeneratedImageBase64) {
-                        result = "No image available to analyze. Please generate or edit one first.";
+                    case "edit_image":
+                        if (!lastGeneratedImageBase64) {
+                            result = "No previous image found to edit. Please generate one first.";
+                            break;
+                        }
+                        const imageBuffer = Buffer.from(lastGeneratedImageBase64, 'base64');
+                        const imageInput = await toFile(imageBuffer, 'image_to_edit.png', { type: 'image/png' });
+                        const editResponse = await openai.images.edit({
+                            model: "gpt-image-1",
+                            image: imageInput,
+                            quality: "medium",
+                            prompt: args.prompt,
+                            n: 1,
+                            size: "1024x1024"
+                        });
+                        imageBase64 = editResponse.data[0].b64_json;
+                        lastGeneratedImageBase64 = imageBase64;
+                        result = "Image edited successfully";
                         break;
-                    }
-                    const visionInput = [{
-                        role: "user",
-                        content: [
-                            { type: "input_text", text: args.question },
-                            {
-                                type: "input_image",
-                                image_url: `data:image/png;base64,${lastGeneratedImageBase64}`
-                            }
-                        ]
-                    }];
-                    const visionResponse = await openai.responses.create({
-                        model: modelId,
-                        input: visionInput
-                    });
-                    result = visionResponse.output_text || "Could not analyze the image.";
-                    break;
-            }
 
-            // Add function call and result to the conversation
-            responseData.input.push(toolCall);
-            responseData.input.push({
-                type: "function_call_output",
-                call_id: toolCall.call_id,
-                output: result.toString()
-            });
+                    case "analyze_image":
+                        if (!lastGeneratedImageBase64) {
+                            result = "No image available to analyze. Please generate or edit one first.";
+                            break;
+                        }
+                        const visionInput = [{
+                            role: "user",
+                            content: [
+                                { type: "input_text", text: args.question },
+                                {
+                                    type: "input_image",
+                                    image_url: `data:image/png;base64,${lastGeneratedImageBase64}`
+                                }
+                            ]
+                        }];
+                        const visionResponse = await openai.responses.create({
+                            model: modelId,
+                            input: visionInput
+                        });
+                        result = visionResponse.output_text || "Could not analyze the image.";
+                        break;
+                }
+
+                // Add tool result to the conversation input array
+                conversationInput.push({
+                    role: "tool",
+                    tool_call_id: toolCall.id, // Use 'id' from the toolCall object
+                    content: result.toString() // Use 'content' for the result
+                });
+            }
         }
 
         // Get final response incorporating function results
         const finalResponse = await openai.responses.create({
             model: modelId,
-            input: responseData.input,
+            input: conversationInput, // Use the correctly built input array
             tools,
-            store: true
+            store: true // Keep store: true if you need stateful responses via ID
         });
 
-        assistantText = finalResponse.output_text;
-        lastResponseId = finalResponse.id;
+        // Extract final assistant text from the potentially new response structure
+        const finalAssistantMessage = finalResponse.output?.find(item => item.type === 'message' && item.role === 'assistant');
+        assistantText = finalAssistantMessage?.content?.find(c => c.type === 'output_text')?.text || "Sorry, I couldn't generate a response.";
+
+        lastResponseId = finalResponse.id; // Update lastResponseId with the ID of the *final* response
 
         // --- Send Response to Client ---
         res.json({
