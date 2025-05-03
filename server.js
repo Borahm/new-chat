@@ -113,63 +113,72 @@ app.post('/api/chat', async (req, res) => {
         let assistantText = null;
         let imageBase64 = null;
 
-        // Initialize the input for the next API call
+        // Initialize the input array for the *next* API call
         let conversationInput = [{ role: "user", content: message }];
 
-        // Extract the first assistant message (which might contain tool calls)
-        const firstAssistantMessage = responseData.output?.find(item => item.type === 'message' && item.role === 'assistant');
-        if (firstAssistantMessage) {
-            conversationInput.push(firstAssistantMessage); // Add assistant's turn
-        }
-
-        // --- Process function calls (if any) ---
+        // Add the assistant's first response message (which contains the tool_calls) to the input
         const toolCalls = responseData.output?.filter(item => item.type === "function_call") || [];
+        const firstAssistantMessage = responseData.output?.find(item => item.type === 'message' && item.role === 'assistant');
 
         if (toolCalls.length > 0) {
+            // Tool calls exist, process them
             for (const toolCall of toolCalls) {
                 const name = toolCall.name;
                 const args = JSON.parse(toolCall.arguments);
 
-                let result;
+                // Append the function_call item itself to the input for the next call
+                conversationInput.push(toolCall);
+
+                let result; // To store the output of the locally executed function
                 switch (name) {
                     case "generate_image":
                         const imageResponse = await openai.images.generate({
-                            model: "gpt-image-1",
+                            model: "gpt-image-1", // Use the model specified in docs
                             prompt: args.prompt,
-                            quality: "medium",
                             n: 1,
                             size: "1024x1024"
                         });
+                        // Directly use the base64 data from the response as per docs
                         imageBase64 = imageResponse.data[0].b64_json;
+                        if (!imageBase64) {
+                            throw new Error("Image generation response did not contain b64_json data.");
+                        }
                         lastGeneratedImageBase64 = imageBase64;
-                        result = "Image generated successfully";
+                        console.log("Tool 'generate_image' executed.");
+                        result = "Image generated successfully."; // Set result for function_call_output
                         break;
 
                     case "edit_image":
                         if (!lastGeneratedImageBase64) {
-                            result = "No previous image found to edit. Please generate one first.";
+                            console.warn("Edit requested but no image available.");
+                            result = "Error: No previous image found to edit.";
                             break;
                         }
                         const imageBuffer = Buffer.from(lastGeneratedImageBase64, 'base64');
                         const imageInput = await toFile(imageBuffer, 'image_to_edit.png', { type: 'image/png' });
                         const editResponse = await openai.images.edit({
-                            model: "gpt-image-1",
-                            image: imageInput,
-                            quality: "medium",
+                            model: "gpt-image-1", // Use the same model
+                            image: imageBuffer, // Pass the buffer
                             prompt: args.prompt,
                             n: 1,
                             size: "1024x1024"
                         });
                         imageBase64 = editResponse.data[0].b64_json;
+                        if (!imageBase64) {
+                            throw new Error("Image edit response did not contain b64_json data.");
+                        }
                         lastGeneratedImageBase64 = imageBase64;
-                        result = "Image edited successfully";
+                        console.log("Tool 'edit_image' executed.");
+                        result = "Image edited successfully."; // Set result for function_call_output
                         break;
 
                     case "analyze_image":
                         if (!lastGeneratedImageBase64) {
-                            result = "No image available to analyze. Please generate or edit one first.";
+                            console.warn("Analysis requested but no image available.");
+                            result = "Error: No image available to analyze.";
                             break;
                         }
+                        // Execute the analysis by calling the API *internally* as part of the tool execution
                         const visionInput = [{
                             role: "user",
                             content: [
@@ -180,43 +189,56 @@ app.post('/api/chat', async (req, res) => {
                                 }
                             ]
                         }];
-                        const visionResponse = await openai.responses.create({
-                            model: modelId,
-                            input: visionInput
-                        });
-                        result = visionResponse.output_text || "Could not analyze the image.";
+                        try {
+                            const visionResponse = await openai.responses.create({
+                                model: modelId, // Use the same model or a dedicated vision model if preferred
+                                input: visionInput
+                                // Note: No tools, previous_response_id, or store needed for this internal call
+                            });
+                            // Extract the text result from the vision call's output
+                            const visionAssistantMessage = visionResponse.output?.find(item => item.type === 'message' && item.role === 'assistant');
+                            result = visionAssistantMessage?.content?.find(c => c.type === 'output_text')?.text || "Could not analyze the image.";
+                        } catch (visionError) {
+                            console.error('Error during internal vision API call:', visionError);
+                            result = "Error analyzing image.";
+                        }
                         break;
                 }
 
-                // Add tool result to the conversation input array
+                // Append the function result message
                 conversationInput.push({
-                    role: "tool",
-                    tool_call_id: toolCall.id, // Use 'id' from the toolCall object
-                    content: result.toString() // Use 'content' for the result
+                    type: "function_call_output",
+                    call_id: toolCall.call_id, // Use call_id from the function_call item
+                    output: result.toString()
                 });
             }
+
+            // Make the SECOND API call, providing the full accumulated input
+            console.log("Making second API call with accumulated input:", JSON.stringify(conversationInput, null, 2));
+            const finalResponse = await openai.responses.create({
+                model: modelId,
+                input: conversationInput, // Provide the full history including function calls and results
+                tools, // Provide tools definition again
+                store: true // Ensure state is stored for potential future turns
+            });
+
+            // Extract final assistant text from this second response
+            const finalAssistantMessage = finalResponse.output?.find(item => item.type === 'message' && item.role === 'assistant');
+            assistantText = finalAssistantMessage?.content?.find(c => c.type === 'output_text')?.text || "Sorry, I couldn't finalize the response after tool use.";
+
+            lastResponseId = finalResponse.id; // Update state with the ID of the *final* response
+
+            // --- Send Response to Client ---
+            res.json({
+                assistantResponse: assistantText,
+                imageBase64: imageBase64 // Send image if generated/edited during this turn
+            });
+        } else {
+            // No tool calls in the first response, extract text and send
+            assistantText = firstAssistantMessage?.content?.find(c => c.type === 'output_text')?.text || "Sorry, I couldn't generate a response.";
+            lastResponseId = currentResponseId; // Update state with the ID of this direct response
+            res.json({ assistantResponse: assistantText, imageBase64: null }); // Send response
         }
-
-        // Get final response incorporating function results
-        const finalResponse = await openai.responses.create({
-            model: modelId,
-            input: conversationInput, // Use the correctly built input array
-            tools,
-            store: true // Keep store: true if you need stateful responses via ID
-        });
-
-        // Extract final assistant text from the potentially new response structure
-        const finalAssistantMessage = finalResponse.output?.find(item => item.type === 'message' && item.role === 'assistant');
-        assistantText = finalAssistantMessage?.content?.find(c => c.type === 'output_text')?.text || "Sorry, I couldn't generate a response.";
-
-        lastResponseId = finalResponse.id; // Update lastResponseId with the ID of the *final* response
-
-        // --- Send Response to Client ---
-        res.json({
-            assistantResponse: assistantText,
-            imageBase64: imageBase64
-        });
-
     } catch (error) {
         console.error('Error processing chat message:', error);
         res.status(500).json({ error: 'Failed to process chat message', details: error.message });
@@ -234,7 +256,6 @@ app.get('/*', (req, res) => {
 app.listen(port, () => {
     console.log(`Server listening at http://localhost:${port}`);
     console.log(`Using model: ${modelId}`);
-    // Optional: Check for API key presence on startup
     if (!process.env.OPENAI_API_KEY) {
         console.warn('WARN: OPENAI_API_KEY is not set in the .env file.');
     }
