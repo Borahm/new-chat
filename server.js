@@ -33,254 +33,184 @@ const imageAnalyzeInstructions = `If the user asks a question *about the previou
 const combinedInstructions = `${baseInstructions}\n\n${imageGenInstructions}\n\n${imageEditInstructions}\n\n${imageAnalyzeInstructions}\n
 For any non-image related requests, respond normally but keep responses concise.`;
 
+// --- Function Definitions ---
+const tools = [
+    {
+        type: "function",
+        name: "generate_image",
+        description: "Generate a new image based on a detailed description.",
+        parameters: {
+            type: "object",
+            properties: {
+                prompt: {
+                    type: "string",
+                    description: "Detailed description of the image to generate, including style, mood, lighting, and composition"
+                }
+            },
+            required: ["prompt"],
+            additionalProperties: false
+        },
+        strict: true
+    },
+    {
+        type: "function",
+        name: "edit_image",
+        description: "Edit the previously generated image with specific modifications.",
+        parameters: {
+            type: "object",
+            properties: {
+                prompt: {
+                    type: "string",
+                    description: "Clear description of the changes to make to the image"
+                }
+            },
+            required: ["prompt"],
+            additionalProperties: false
+        },
+        strict: true
+    },
+    {
+        type: "function",
+        name: "analyze_image",
+        description: "Analyze the previously generated/edited image to answer questions about it.",
+        parameters: {
+            type: "object",
+            properties: {
+                question: {
+                    type: "string",
+                    description: "Question to ask about the image"
+                }
+            },
+            required: ["question"],
+            additionalProperties: false
+        },
+        strict: true
+    }
+];
+
 // --- API Routes ---
 app.post('/api/chat', async (req, res) => {
     const { message } = req.body;
 
     if (!process.env.OPENAI_API_KEY) {
-         return res.status(500).json({ error: 'OPENAI_API_KEY is not set in .env file' });
+        return res.status(500).json({ error: 'OPENAI_API_KEY is not set in .env file' });
     }
     if (!message) {
         return res.status(400).json({ error: 'Message content is required' });
     }
 
     try {
-        // --- Call the /v1/responses endpoint using the dedicated method ---
-        console.log(`Sending to /v1/responses: input='${message}', previous_response_id='${lastResponseId}'`);
+        // --- Call OpenAI with function definitions ---
         const response = await openai.responses.create({
-            input: message,
             model: modelId,
-            previous_response_id: lastResponseId,
-            instructions: combinedInstructions, // Use combined instructions
-            // store: true, // Default: store response for context (unless you want stateless)
+            input: [{ role: "user", content: message }],
+            tools,
+            previous_response_id: lastResponseId
         });
 
-        // --- Process the response ---
         const responseData = response;
         const currentResponseId = responseData?.id;
-        let assistantText = "Sorry, I couldn't get a response.";
-        let imageBase64 = null; // Variable to hold image data
+        let assistantText = null;
+        let imageBase64 = null;
 
-        // Extract text output using the observed structure
-        if (responseData?.output_text) {
-            assistantText = responseData.output_text;
-        } else if (
-            Array.isArray(responseData?.output) &&
-            responseData.output[0]?.type === 'message' &&
-            Array.isArray(responseData.output[0]?.content) &&
-            responseData.output[0].content[0]?.type === 'output_text' &&
-            responseData.output[0].content[0]?.text
-        ) {
-            assistantText = responseData.output[0].content[0].text;
-        }
-
-        console.log(`Received response text: '${assistantText.substring(0, 100)}...'`);
-
-        // --- Check for Image Edit Signal FIRST ---
-        const imageEditPromptPrefix = "IMAGE_EDIT_PROMPT: ";
-        const imageGenPromptPrefix = "IMAGE_PROMPT: ";
-        const imageAnalyzePromptPrefix = "IMAGE_ANALYZE_PROMPT: "; // New prefix
-
-        if (assistantText.startsWith(imageEditPromptPrefix)) {
-            const editPrompt = assistantText.substring(imageEditPromptPrefix.length).trim();
-            console.log(`Detected image edit request. Prompt: "${editPrompt}"`);
-
-            if (!lastGeneratedImageBase64) {
-                console.log("No previous image found to edit.");
-                assistantText = "You asked to edit an image, but I don't have a previous image stored. Please generate one first.";
-                // Keep currentResponseId to update lastResponseId for this text response
-            } else if (!editPrompt) {
-                 console.log("Edit prompt is empty.");
-                 assistantText = "You asked to edit the image, but didn't specify the changes. What should I do?";
-                 // Keep currentResponseId
-            } else {
-                try {
-                    console.log("Preparing image data for editing...");
-                    const imageBuffer = Buffer.from(lastGeneratedImageBase64, 'base64');
-                    // Use a consistent filename, it doesn't matter much as it's in memory
-                    // Explicitly set the MIME type in the options object
-                    const imageInput = await toFile(imageBuffer, 'image_to_edit.png', { type: 'image/png' });
-
-                    console.log("Calling OpenAI Image Edit API...");
-                    const editResponse = await openai.images.edit({
-                        model: "gpt-image-1",
-                        image: imageInput, // Pass the prepared image file object
-                        quality: "medium",
-                        prompt: editPrompt,
-                        n: 1,
-                        size: "1024x1024" // Keep size consistent for now
-                    });
-
-                    console.log("Image edit successful.");
-                    imageBase64 = editResponse.data[0].b64_json;
-                    lastGeneratedImageBase64 = imageBase64; // Update the stored image to the *edited* version
-                    assistantText = null; // Clear the prompt text
-                    console.log("Image edited, updating lastResponseId and last image.");
-                    // Update context to this successful response
-                    if (currentResponseId) lastResponseId = currentResponseId;
-                    else {
-                        console.log("Warning: No currentResponseId after successful edit?");
-                        lastResponseId = null; // Fallback reset if ID missing
-                    }
-
-                } catch (editError) {
-                    console.error("Error calling OpenAI Image Edit API:", editError);
-                    assistantText = `Sorry, I encountered an error trying to edit the image: ${editError.message}`;
-                    // Keep currentResponseId, don't reset last image on edit failure
-                    console.log("Image edit failed, keeping lastResponseId.");
-                    if (currentResponseId) lastResponseId = currentResponseId;
-                }
+        // --- Process function calls ---
+        for (const toolCall of responseData.output) {
+            if (toolCall.type !== "function_call") {
+                continue;
             }
-        // --- Check for Image Generation Signal (if not edit) ---
-        } else if (assistantText.startsWith(imageGenPromptPrefix)) {
-            const imagePrompt = assistantText.substring(imageGenPromptPrefix.length).trim();
-            console.log(`Detected image generation request. Prompt: "${imagePrompt}"`);
 
-            if (imagePrompt) {
-                try {
-                    console.log("Calling OpenAI Image Generation API...");
+            const name = toolCall.name;
+            const args = JSON.parse(toolCall.arguments);
+
+            let result;
+            switch (name) {
+                case "generate_image":
                     const imageResponse = await openai.images.generate({
                         model: "gpt-image-1",
-                        prompt: imagePrompt,
+                        prompt: args.prompt,
                         quality: "medium",
                         n: 1,
                         size: "1024x1024"
                     });
-                    console.log("Image generation successful.");
                     imageBase64 = imageResponse.data[0].b64_json;
-                    lastGeneratedImageBase64 = imageBase64; // Store the newly generated image
-                    assistantText = null; // Clear the prompt text
-                    console.log("Image generated, updating lastResponseId and last image.");
-                    // Update context to this successful response
-                    if (currentResponseId) lastResponseId = currentResponseId;
-                    else {
-                        console.log("Warning: No currentResponseId after successful generation?");
-                        lastResponseId = null; // Fallback reset if ID missing
+                    lastGeneratedImageBase64 = imageBase64;
+                    result = "Image generated successfully";
+                    break;
+
+                case "edit_image":
+                    if (!lastGeneratedImageBase64) {
+                        result = "No previous image found to edit. Please generate one first.";
+                        break;
                     }
+                    const imageBuffer = Buffer.from(lastGeneratedImageBase64, 'base64');
+                    const imageInput = await toFile(imageBuffer, 'image_to_edit.png', { type: 'image/png' });
+                    const editResponse = await openai.images.edit({
+                        model: "gpt-image-1",
+                        image: imageInput,
+                        quality: "medium",
+                        prompt: args.prompt,
+                        n: 1,
+                        size: "1024x1024"
+                    });
+                    imageBase64 = editResponse.data[0].b64_json;
+                    lastGeneratedImageBase64 = imageBase64;
+                    result = "Image edited successfully";
+                    break;
 
-                } catch (imageError) {
-                    console.error("Error calling OpenAI Image Generation API:", imageError);
-                    assistantText = `Sorry, I encountered an error trying to generate the image: ${imageError.message}`;
-                    // Keep currentResponseId, don't update last image on generation failure
-                    console.log("Image generation failed, keeping lastResponseId.");
-                    if (currentResponseId) lastResponseId = currentResponseId;
-                }
-            } else {
-                assistantText = "It seems you wanted an image, but didn't provide a description. What should I generate?";
-                // Keep currentResponseId
-                console.log("Image generation prompt empty, keeping lastResponseId.");
-                if (currentResponseId) lastResponseId = currentResponseId;
-            }
-        // --- Check for Image Analysis Signal (if not edit or generate) ---
-        } else if (assistantText.startsWith(imageAnalyzePromptPrefix)) {
-            const analyzeQuery = assistantText.substring(imageAnalyzePromptPrefix.length).trim();
-            console.log(`Detected image analysis request. Query: "${analyzeQuery}"`);
-
-            if (!lastGeneratedImageBase64) {
-                console.log("No previous image found to analyze.");
-                assistantText = "You asked me to analyze an image, but I don't have one stored. Please generate or edit one first.";
-                // Keep currentResponseId for this text response
-                if (currentResponseId) lastResponseId = currentResponseId;
-                 else lastResponseId = null;
-            } else if (!analyzeQuery) {
-                 console.log("Analysis query is empty.");
-                 assistantText = "You asked me to analyze the image, but didn't specify what to look for. What should I analyze?";
-                 // Keep currentResponseId
-                 if (currentResponseId) lastResponseId = currentResponseId;
-                 else lastResponseId = null;
-            } else {
-                try {
-                    console.log("Preparing vision API call...");
+                case "analyze_image":
+                    if (!lastGeneratedImageBase64) {
+                        result = "No image available to analyze. Please generate or edit one first.";
+                        break;
+                    }
                     const visionInput = [{
                         role: "user",
                         content: [
-                            { type: "input_text", text: analyzeQuery },
+                            { type: "input_text", text: args.question },
                             {
                                 type: "input_image",
-                                // Format as Base64 data URL
-                                image_url: `data:image/png;base64,${lastGeneratedImageBase64}`,
-                                // detail: "auto" // Optional: Or 'low'/'high'
-                            },
-                        ],
+                                image_url: `data:image/png;base64,${lastGeneratedImageBase64}`
+                            }
+                        ]
                     }];
-
-                    console.log(`Calling OpenAI Responses API for vision analysis with model: ${modelId}...`);
-                    // Make a separate call specifically for vision
                     const visionResponse = await openai.responses.create({
-                        model: modelId, // Use the primary model (needs vision capability)
-                        input: visionInput,
-                        // No previous_response_id or instructions needed here
+                        model: modelId,
+                        input: visionInput
                     });
-
-                    // Extract the analysis text
-                    let analysisText = "";
-                    if (visionResponse?.output_text) {
-                       analysisText = visionResponse.output_text;
-                    } else if (visionResponse?.choices?.[0]?.message?.content) {
-                       analysisText = visionResponse.choices[0].message.content;
-                    } else {
-                       console.warn("Could not extract text from vision response.", visionResponse);
-                       analysisText = "Sorry, I analyzed the image but couldn't form a text response.";
-                    }
-
-                    console.log("Vision analysis successful.");
-                    assistantText = analysisText; // Set the main response text to the analysis result
-                    imageBase64 = null; // This response is text, not an image
-
-                    // IMPORTANT: Keep the lastResponseId from the *previous* step (the one that gave the ANALYZE signal)
-                    // This is handled by the logic below, which uses currentResponseId
-                    console.log(`Vision analysis complete, keeping lastResponseId from signal step: ${currentResponseId}`);
-                     if (currentResponseId) lastResponseId = currentResponseId;
-                     else {
-                        console.log("Warning: No currentResponseId after analyze signal?");
-                        lastResponseId = null; // Fallback reset
-                     }
-                     // Don't modify lastGeneratedImageBase64 here, keep it for potential future edits/analysis
-
-                } catch (analysisError) {
-                    console.error("Error calling OpenAI Vision API:", analysisError);
-                    assistantText = `Sorry, I encountered an error trying to analyze the image: ${analysisError.message}`;
-                    // Keep lastResponseId from the signal step
-                    console.log("Vision analysis failed, keeping lastResponseId from signal step.");
-                     if (currentResponseId) lastResponseId = currentResponseId;
-                     else lastResponseId = null;
-                }
+                    result = visionResponse.output_text || "Could not analyze the image.";
+                    break;
             }
+
+            // Add function call and result to the conversation
+            responseData.input.push(toolCall);
+            responseData.input.push({
+                type: "function_call_output",
+                call_id: toolCall.call_id,
+                output: result.toString()
+            });
         }
 
-        // --- Update conversation state (only if it was a pure text response or specific error) ---
-        // This part is now handled within the if/else if blocks for image/edit logic
-        // We only update lastResponseId for pure text responses or specific error cases
-        if (assistantText && !imageBase64) { // If we ended up with only text
-            if (currentResponseId) {
-                console.log(`Updating lastResponseId for text/error response: ${currentResponseId}`);
-                lastResponseId = currentResponseId;
-            } else {
-                console.log("No currentResponseId available for text/error, resetting lastResponseId.");
-                lastResponseId = null; // Reset if ID missing
-            }
-            // Don't reset lastGeneratedImageBase64 for normal text flow
-        } else if (!assistantText && !imageBase64) {
-            // If we somehow end up with neither text nor image (shouldn't happen with current logic)
-            console.log("No text or image generated, resetting lastResponseId.");
-            lastResponseId = null;
-        }
-        // State updates for successful image gen/edit are handled inside their blocks
-        // State update for successful analysis is handled above
+        // Get final response incorporating function results
+        const finalResponse = await openai.responses.create({
+            model: modelId,
+            input: responseData.input,
+            tools,
+            store: true
+        });
 
+        assistantText = finalResponse.output_text;
+        lastResponseId = finalResponse.id;
 
         // --- Send Response to Client ---
         res.json({
             assistantResponse: assistantText,
-            imageBase64: imageBase64 // Send image data if available
+            imageBase64: imageBase64
         });
 
     } catch (error) {
         console.error('Error processing chat message:', error);
         res.status(500).json({ error: 'Failed to process chat message', details: error.message });
-        // Reset context on general error
         lastResponseId = null;
-        lastGeneratedImageBase64 = null; // Also reset last image on general error
+        lastGeneratedImageBase64 = null;
     }
 });
 
