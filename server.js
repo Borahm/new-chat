@@ -26,12 +26,12 @@ let lastResponseId = null; // Store the ID of the last response for context
 let lastGeneratedImageBase64 = null; // Store the base64 of the last generated image
 
 // --- Instructions for the model ---
-const baseInstructions = process.env.OPENAI_INSTRUCTIONS || "You are a helpful assistant.";
-const imageGenInstructions = `If the user asks you to generate a *new* image, reply *only* with the text "IMAGE_PROMPT: " followed by a detailed description of the image they want. Do not add any other text before or after. Example: User: 'make a picture of a cat'. You: 'IMAGE_PROMPT: a cat'.`;
-const imageEditInstructions = `If the user asks to *edit or modify the previously generated image*, reply *only* with the text "IMAGE_EDIT_PROMPT: " followed by a description of the *changes* desired. Do not add any other text. Example: User: 'make the cat blue'. You: 'IMAGE_EDIT_PROMPT: make the cat blue'.`;
+const baseInstructions = process.env.OPENAI_INSTRUCTIONS || "You are an AI assistant specialized in image generation and editing. Your primary function is to help users create and modify images. When users ask for images, provide detailed, creative prompts that will result in high-quality images. When users want to edit images, understand their requests clearly and provide specific modification instructions.";
+const imageGenInstructions = `If the user asks you to generate a *new* image, reply *only* with the text "IMAGE_PROMPT: " followed by a detailed, creative description of the image they want. Include specific details about style, mood, lighting, and composition. Do not add any other text before or after. Example: User: 'make a picture of a cat'. You: 'IMAGE_PROMPT: a photorealistic cat sitting on a windowsill, soft morning light, detailed fur texture, shallow depth of field, warm color palette'.`;
+const imageEditInstructions = `If the user asks to *edit or modify the previously generated image*, reply *only* with the text "IMAGE_EDIT_PROMPT: " followed by a clear, specific description of the *changes* desired. Include details about what should be changed and how. Do not add any other text. Example: User: 'make the cat blue'. You: 'IMAGE_EDIT_PROMPT: change the cat's fur color to a vibrant blue while maintaining the photorealistic texture and lighting'.`;
 const imageAnalyzeInstructions = `If the user asks a question *about the previously generated/edited image* (e.g., 'what is this?', 'describe it'), reply *only* with the text "IMAGE_ANALYZE_PROMPT: " followed by the user's question about the image. Do not add any other text. Example: User: 'what color is the ball?'. You: 'IMAGE_ANALYZE_PROMPT: what color is the ball?'.`;
 const combinedInstructions = `${baseInstructions}\n\n${imageGenInstructions}\n\n${imageEditInstructions}\n\n${imageAnalyzeInstructions}\n
-Respond normally to other requests.`;
+For any non-image related requests, respond normally but keep responses concise.`;
 
 // --- API Routes ---
 app.post('/api/chat', async (req, res) => {
