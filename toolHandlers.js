@@ -65,7 +65,8 @@ async function handleGenerateImage(args) {
             model: "gpt-image-1", // Use gpt-image-1 as requested
             prompt: args.prompt,
             n: 1,
-            size: "1024x1024"
+            size: "1024x1024",
+            quality: "medium",
         });
         console.log("Image Response from API (Generate):", JSON.stringify(imageResponse, null, 2));
 
@@ -111,6 +112,7 @@ async function handleEditImage(args, currentImageBase64) {
             n: 1,
             size: "1024x1024",
             model: "gpt-image-1",
+            quality: "medium",
         });
 
         console.log("Image Response from API (Edit):", JSON.stringify(editResponse, null, 2));
@@ -147,7 +149,6 @@ async function handleAnalyzeImage(args, currentImageBase64) {
                     ],
                 },
             ],
-            max_tokens: 300, // Adjust as needed
         });
 
         console.log("Vision API Response:", JSON.stringify(visionResponse, null, 2));
@@ -161,8 +162,7 @@ async function handleAnalyzeImage(args, currentImageBase64) {
     }
 }
 
-// We can also create a master handler function if desired, or export individual ones.
-// For now, exporting individually is fine.
+
 module.exports = {
     tools,
     handleGenerateImage,
