@@ -125,7 +125,6 @@ async function handleEditImage(args, currentImageBase64) {
             prompt: args.prompt,
             n: 1,
             size: "1024x1024"
-            // response_format: "b64_json" // Removed again as gpt-image-1 defaults to base64
         });
         // Corrected extraction path based on documentation
         const imageBase64 = editResponse.data[0].b64_json;
@@ -169,7 +168,6 @@ async function handleAnalyzeImage(args, currentImageBase64) {
         const visionResponse = await openai.responses.create({ // Revert to responses.create
             model: modelId, // Use the main chat model ID (e.g., gpt-4o)
             input: visionInput, // Use input parameter
-            // max_tokens: 300 // Max tokens might not be applicable here
         });
 
         // Extract the text result from the vision call's output array
@@ -209,7 +207,7 @@ app.post('/api/chat', async (req, res) => {
             instructions: baseInstructions, // Use dedicated instructions parameter
             tools: tools, // Keep corrected tool structure
             previous_response_id: lastResponseId, // Use API state management
-            store: true // Use API state management
+            store: true // Use API state management'
         });
 
         console.log("Received response from API:", JSON.stringify(response, null, 2));
@@ -319,9 +317,7 @@ app.post('/api/chat', async (req, res) => {
     } catch (error) {
         console.error('Error processing chat message:', error);
         res.status(500).json({ error: 'Failed to process chat message', details: error.message });
-        // Reset state on error if necessary
-        // lastResponseId = null;
-        // lastGeneratedImageBase64 = null;
+
     }
 });
 
