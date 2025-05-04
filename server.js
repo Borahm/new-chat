@@ -1,18 +1,15 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const OpenAI = require('openai');
-const { toFile } = require('openai'); // Import toFile helper
 const path = require('path');
+
+// Import OpenAI client and config
+const { openai, modelId, baseInstructions } = require('./openaiClient');
+// Import tools and handlers
+const { tools, handleGenerateImage, handleEditImage, handleAnalyzeImage } = require('./toolHandlers');
 
 const app = express();
 const port = process.env.PORT || 3001;
-
-// --- OpenAI Client Initialization ---
-const openai = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY,
-});
-const modelId = process.env.OPENAI_MODEL_ID || 'gpt-4o'; // Or your preferred model
 
 // --- Middleware ---
 app.use(cors());
@@ -22,164 +19,8 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, 'client/build')));
 
 // --- In-memory store for conversation state ---
-let lastResponseId = null; // Store the ID of the last response for context - (Note: ID handling might need adjustment for chat completions)
+let lastResponseId = null; // Store the ID of the last response for context
 let lastGeneratedImageBase64 = null; // Store the base64 of the last generated image
-
-// --- Instructions for the model ---
-const baseInstructions = process.env.OPENAI_INSTRUCTIONS || "You are an AI assistant specialized in image generation, editing, and analysis using provided tools. Help users create, modify, and understand images based on their requests.";
-
-// --- Function Definitions ---
-const tools = [
-    {
-        type: "function",
-        name: "generate_image",
-        description: "Generate a new image based on a detailed description.",
-        parameters: {
-            type: "object",
-            properties: {
-                prompt: {
-                    type: "string",
-                    description: "Detailed description of the image to generate. Should include style, mood, lighting, composition etc."
-                }
-            },
-            required: ["prompt"],
-            additionalProperties: false
-        },
-        strict: true
-    },
-    {
-        type: "function",
-        name: "edit_image",
-        description: "Edit the previously generated image based on instructions.",
-        parameters: {
-            type: "object",
-            properties: {
-                prompt: {
-                    type: "string",
-                    description: "Clear instructions on how to edit the previous image."
-                }
-            },
-            required: ["prompt"],
-            additionalProperties: false
-        },
-        strict: true
-    },
-    {
-        type: "function",
-        name: "analyze_image",
-        description: "Analyze the previously generated image and answer a question about it.",
-        parameters: {
-            type: "object",
-            properties: {
-                question: {
-                    type: "string",
-                    description: "The question to ask about the previous image."
-                }
-            },
-            required: ["question"],
-            additionalProperties: false
-        },
-        strict: true
-    }
-];
-
-// --- Helper Functions for Tool Execution ---
-
-async function handleGenerateImage(args) {
-    console.log("Executing tool 'generate_image' with args:", args);
-    try {
-        const imageResponse = await openai.images.generate({
-            model: "gpt-image-1", // Use specified model
-            prompt: args.prompt,
-            n: 1,
-            size: "1024x1024"
-            // response_format: "b64_json", // Removed as per user request
-        });
-        // Log the full response to see its structure
-        console.log("Image Response from API:", JSON.stringify(imageResponse, null, 2));
-
-        // Corrected extraction path based on documentation
-        const imageBase64 = imageResponse.data[0].b64_json; 
-        console.log("Tool 'generate_image' executed successfully.");
-        return { result: "Image generated successfully.", imageBase64: imageBase64 };
-    } catch (error) {
-        console.error("Error generating image:", error);
-        return { result: "Error generating image.", imageBase64: null };
-    }
-}
-
-async function handleEditImage(args, currentImageBase64) {
-    console.log("Executing tool 'edit_image' with args:", args);
-    if (!currentImageBase64) {
-        console.warn("Edit requested but no image available.");
-        return { result: "No image available to edit.", imageBase64: null };
-    }
-    try {
-        const imageBuffer = Buffer.from(currentImageBase64, 'base64');
-        // Use toFile to create a file-like object from the buffer, explicitly setting the type
-        const imageFile = await toFile(imageBuffer, 'image.png', { type: 'image/png' });
-
-        const editResponse = await openai.images.edit({
-            model: "gpt-image-1", // Use specified model
-            image: imageFile,
-            prompt: args.prompt,
-            n: 1,
-            size: "1024x1024"
-        });
-        // Corrected extraction path based on documentation
-        const imageBase64 = editResponse.data[0].b64_json;
-        console.log("Tool 'edit_image' executed successfully.");
-        return { result: "Image edited successfully.", imageBase64: imageBase64 };
-    } catch (error) {
-        console.error("Error editing image:", error);
-        // Log specific API error details if available
-        if (error.response) {
-            console.error('API Error Data:', error.response.data);
-            console.error('API Error Status:', error.response.status);
-            console.error('API Error Headers:', error.response.headers);
-        }
-        return { result: `Error editing image: ${error.message}`, imageBase64: null };
-    }
-}
-
-async function handleAnalyzeImage(args, currentImageBase64) {
-    console.log("Executing tool 'analyze_image' with args:", args);
-    if (!currentImageBase64) {
-        console.warn("Analysis requested but no image available.");
-        return { result: "No image available to analyze.", imageBase64: null };
-    }
-
-    const visionInput = [{
-        role: "user",
-        content: [
-            {
-                type: "output_text",
-                text: args.question // The user's question about the image
-            },
-            {
-                type: "input_image",
-                image_url: `data:image/png;base64,${currentImageBase64}`
-            }
-        ]
-    }];
-
-    try {
-        // Use the main chat model (which supports vision) for analysis
-        const visionResponse = await openai.responses.create({ // Revert to responses.create
-            model: modelId, // Use the main chat model ID (e.g., gpt-4o)
-            input: visionInput, // Use input parameter
-        });
-
-        // Extract the text result from the vision call's output array
-        const visionAssistantMessage = visionResponse.output?.find(item => item.type === 'message' && item.role === 'assistant');
-        const analysisText = visionAssistantMessage?.content?.find(c => c.type === 'output_text')?.text || "Could not analyze the image.";
-        console.log("Tool 'analyze_image' executed successfully.");
-        return { result: analysisText, imageBase64: null }; // Analysis returns text, not a new image
-    } catch (visionError) {
-        console.error('Error during vision analysis API call:', visionError);
-        return { result: `Error analyzing image: ${visionError.message}`, imageBase64: null };
-    }
-}
 
 // --- API Routes ---
 app.post('/api/chat', async (req, res) => {
@@ -201,7 +42,7 @@ app.post('/api/chat', async (req, res) => {
 
     try {
         // --- Call OpenAI Responses API ---
-        const response = await openai.responses.create({ // Revert to responses.create
+        const response = await openai.responses.create({ 
             model: modelId,
             input: initialInput, // Use input param without system message
             instructions: baseInstructions, // Use dedicated instructions parameter
@@ -284,7 +125,7 @@ app.post('/api/chat', async (req, res) => {
             // --- Make the SECOND API call with tool results --- 
             // The input now contains: user message, function_call(s), function_call_output(s)
             console.log(`Making second API call. Input: ${JSON.stringify(conversationInput, null, 2)}, Instructions: '${baseInstructions}'`);
-            const finalResponse = await openai.responses.create({ // Revert to responses.create
+            const finalResponse = await openai.responses.create({ 
                 model: modelId,
                 input: conversationInput, // Send accumulated input
                 instructions: baseInstructions, // Provide instructions again
@@ -329,8 +170,5 @@ app.get('/*', (req, res) => {
 
 app.listen(port, () => {
     console.log(`Server listening at http://localhost:${port}`);
-    console.log(`Using model: ${modelId}`);
-    if (!process.env.OPENAI_API_KEY) {
-        console.warn('WARN: OPENAI_API_KEY is not set in the .env file.');
-    }
+    console.log(`Using model: ${modelId}`); // Keep this log, now using imported modelId
 });
